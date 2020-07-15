@@ -1,0 +1,584 @@
+---
+title: "tidycensus Tutorial"
+author: "Alex Brasch"
+date: "4/15/2020"
+output:
+  html_document:
+    includes:
+      before_body: header.html
+      after_body: footer.html
+    code_folding: hide
+    highlight: zenburn
+    self_contained: yes
+    theme: darkly
+    toc: yes
+    toc_depth: '2'
+    toc_float:
+      collapsed: no
+      toc_float: yes
+  pdf_document:
+    toc: yes
+    toc_depth: '2'
+  word_document:
+    toc: yes
+    toc_depth: '2'
+editor_options:
+  chunk_output_type: console
+always_allow_html: yes
+---
+
+```{css, echo = FALSE}
+  pre:not([class]) {
+    color: #333333;
+    background-color: #cccccc;
+  }
+
+blockquote {
+    padding: 10px 20px;
+    margin: 0 0 20px;
+    font-size: 12px;
+    border-left: 5px solid #eee;
+}
+```
+
+```{r setup, echo=FALSE, warning=FALSE, error=FALSE, results='hide', message=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r echo=FALSE, warning=FALSE, error=FALSE, results='hide', message=FALSE}
+# Require the pacman package to easily load all necessary packages
+if(!require(pacman)){install.packages("pacman");library(pacman)}
+suppressPackageStartupMessages(p_load(
+  tidyverse,
+  tidycensus,
+  tigris,
+  sf,
+  rgdal,
+  readxl,
+  writexl,
+  arcgisbinding,
+  mapview,
+  leaflet,
+  kableExtra,
+  janitor,
+  extrafont))
+
+# Set options
+options(tigris_class = "sf", tigris_use_cache = T) # Return an object of class sf via tigris; do not cache Census shapefile downloads
+options(stringsAsFactors = F) # R often uses a concept of factors to re-encode strings. This can be too early and too aggressive. Sometimes a string is just a string. To avoid problems delay re-encoding of strings by using stringsAsFactors = FALSE when creating data.frames.
+options(dplyr.width = Inf) # In response to “Variables not shown” in dplyr; overrides the width of columns that gets printed out (i.e., to display all columns from df)
+options(survey.replicates.mse = T) # options("survey.replicates.mse") controls the default in svrepdesign and as.svrepdesign for computing variances. When options("survey.replicates.mse") is TRUE, the default is to create replicate weight designs that compute variances centered at the point estimate, rather than at the mean of the replicates.
+options(scipen = 999) # 'scipen': integer. A penalty to be applied when deciding to print numeric values in fixed or exponential notation. Positive values bias towards fixed and negative towards scientific notation: fixed notation will be preferred unless it is more than 'scipen' digits wider.
+options(datatable.fread.datatable=F) # Similar to read.table but faster and more convenient. All controls such as sep, colClasses and nrows are automatically detected. bit64::integer64 types are also detected and read directly without needing to read as character before converting.
+```
+
+# Reference & Startup
+
+The documentation and examples within this tutorial were gleaned from the following resources:
+
+[tidycensus](https://walkerke.github.io/tidycensus/ "tidycensus")  
+[tigris](https://www.rdocumentation.org/packages/tigris/versions/0.9.4 "tigris")  
+[tidyverse](https://www.tidyverse.org "tidyverse")  
+[Census Developers](https://www.census.gov/developers/ "Census Developers")  
+[Census Geography Program](https://www.census.gov/programs-surveys/geography.html "Census Geography Program")  
+[Leaflet for R](https://rstudio.github.io/leaflet/ "Leaflet for R")
+
+As noted by its author, Kyle Walker, "`tidycensus` is an R package that allows users to interface with the US Census Bureau’s decennial Census and American Community Survey (ACS) APIs and return tidyverse-ready data frames, optionally with simple feature (sf) geometry included." 
+
+To get started, load the `tidycensus` and `tidyverse` packages. Additional packages used within this RMarkdown file include  tigris, readxl, writexl, arcgisbinding, leaflet, kableExtra, janitor, and extrafont.  
+A Census API key is also required, which can be obtained from http://api.census.gov/data/key_signup.html. Entry of the key using the `census_api_key` function only needs to occur once (i.e., it is tied to RStudio, rather than a single R script or Markdown file).
+
+Install and load packages (uncomment as-needed).
+
+```{r class.source = 'fold-show'}
+# install.packages("tidyverse")
+# install.packages("tidycensus")
+
+# library(tidyverse)
+# library(tidycensus)
+
+# census_api_key("YOUR API KEY GOES HERE")
+```
+
+The following section contains examples of using the `tidycensus` package and Census API to retrieve, prepare, reshape, and blend demographic data for analysis and visualization. To save on processing time and avoid local memory limitations, data-intensive code chunks have been commented out (e.g., retrieving large amounts of census blocks using the `tidycensus` or `tigris` packages). Readers can view the underlying code while the input data is read-in as part of the R Project's local data.
+
+# Review Variables
+
+```{r class.source = 'fold-show'}
+# Load the 2010 decennial census variables
+DC2010_sf1 <- load_variables(2010, "sf1", cache = TRUE)
+# View(DC2010_sf1)
+
+# Load the 2014-2018 5-year ACS variables
+ACS2018_acs5 <- load_variables(2018, "acs5", cache = TRUE)
+# View(ACS2018_acs5)
+```
+
+
+```{r}
+# View a portion of the 2010 decennial census table
+DC2010_sf1 %>% head() %>% kable() %>% kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+
+# View a portion of the 2018 ACS table
+ACS2018_acs5 %>% head() %>% kable() %>% kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+```
+
+# Usage
+
+## Example 1: Decennial Census
+
+Retrieve the 2010 decennial census total population for all U.S. states.
+
+- Define a single, overarching location by default
+- Define a single variable manually
+
+```{r class.source = 'fold-show', results='hide', message = FALSE, warning = FALSE}
+# Retrieve single variable and geographies for all U.S. states
+st_2010_dc <- tidycensus::get_decennial( # API call
+  geography = 'state', # Specify geography for which to retrieve data
+  variables = 'P001001', # Specify variable
+  year = 2010, # Specify year
+  geometry = FALSE, # Include or omit spatial geometry
+  output = 'wide', # Set to wide or tidy/long format
+  cache_table = TRUE # Cache the table so it can be called quicker in the future, or not to save memory
+)
+```
+
+```{r}
+# View data
+st_2010_dc %>% head() %>% kable() %>% kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+```
+
+Retrieve 2010 decennial census variables and geometries for a specific set of geographies
+
+- Define multiple locations manually
+- Define and name multiple variables manually
+- Retrieve geometries
+
+```{r class.source = 'fold-show', results='hide', message = FALSE, warning = FALSE}
+# Retrieve variables and geographies for Multnomah, Washington, and Clackamas counties
+co_2010_dc <- tidycensus::get_decennial( # API call
+  geography = 'county', # Specify geography for which to retrieve data
+  state = 'OR', # Specify state abbreviation
+  county = c('Multnomah', 'Washington', 'Clackamas'), # Specify a list of counties
+  variables = c(pop_tot = 'P001001', # Specify and name multiple variables
+                pop_sex_m_tot = 'P012002',
+                pop_sex_f_tot = 'P012026'),
+  year = 2010, # Specify year
+  geometry = TRUE, # Include or omit spatial geometry
+  output = 'wide', # Set to wide or tidy/long format
+  cache_table = TRUE # Cache the table so it can be called quicker in the future, or not to save memory
+)
+```
+
+```{r}
+# View data
+co_2010_dc %>% st_set_geometry(NULL) %>% head() %>% kable() %>% kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+```
+
+## Example 2: ACS
+
+ACS data differ from decennial census data in that ACS data are based on an annual sample of households, rather than a complete enumeration. In turn, ACS data points are estimates characterized by a margin of error (MOE). `tidycensus` will always return the estimate and MOE for any requested variables. When requesting ACS data with `tidycensus`, it is not necessary to specify the "E" or "M" suffix for a variable name. Available survey types include ACS 5-year estimates (`acs5`) or ACS 1-year estimates (`acs1`). Note that the latter is only available for geographies with populations of 65,000 and greater.
+
+Retrieve 2018 ACS 5-year variables and geometries for a specific set of geographies.
+
+- Define multiple locations manually
+- Define and name multiple variables manually
+- Retrieve geometries, specifically the TIGER/Line shapefiles
+
+Concerning geometries, `tidycensus` used the geographic coordinate system NAD 1983 (EPSG: 4269), which is the default for Census spatial data files. `tidycensus` uses the Census cartographic boundary shapefiles for faster processing; if you prefer the TIGER/Line shapefiles (i.e., Topologically Integrated Geographic Encoding and Referencing), set `cb = FALSE` in the function call. Per Census documentation, the cartographic boundary files are simplified representations of selected geographic areas from the Census Bureau’s Master Address File (MAF)/TIGER geographic database. These boundary files are specifically designed for small scale thematic mapping. When possible, generalization is performed with intent to maintain the hierarchical relationships among geographies and to maintain the alignment of geographies within a file set for a given year. To improve the appearance of shapes, areas are represented with fewer vertices than detailed TIGER/Line equivalents. Some small holes or discontiguous parts of areas are not included in generalized files. Generalized boundary files are clipped to a simplified version of the U.S. outline. As a result, some off-shore areas may be excluded from the generalized files. Consult this [TIGER Data Products Guide](https://www.census.gov/programs-surveys/geography/guidance/tiger-data-products-guide.html "TIGER Data Products Guide") to determine which file type is best for your purposes.
+
+```{r class.source = 'fold-show', results='hide', message = FALSE, warning = FALSE}
+# Retrieve variables and geographies for Multnomah, Washington, and Clackamas counties
+co_2018_acs5 <- tidycensus::get_acs(
+  geography = 'county', # Specify geography for which to retrieve data
+  state = 'OR', # Specify state abbreviation
+  county = c('Multnomah', 'Washington', 'Clackamas'), # Specify a list of counties
+  variables = c(hh_medinc_total = 'B19013_001', # Specify and name multiple variables
+                hh_foodst_total = 'B22003_001', 
+                hh_foodst_rec = 'B22003_002'),
+  year = 2018, # Specify year
+  survey = 'acs5', # Specify survey type
+  geometry = TRUE, # Include or omit spatial geometry
+  cb = FALSE, # Specify cartographic boundary files or TIGER/Line shapefiles
+  output = 'wide', # Set to wide or tidy/long format
+  cache_table = TRUE # Cache the table so it can be called quicker in the future, or not to save memory
+)
+```
+
+```{r}
+# View data
+co_2018_acs5 %>% st_set_geometry(NULL) %>% head() %>% kable() %>% kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+```
+
+Concerning the structure of the data frame, a wide format contains a single row for each observation with many columns representing all variables (human-readable), while a long/tidy format contains many rows per observation (assuming more than one variable) with name-value pairs for each variable and associated value (machine-readable. For more details, see Hadley Wickham's seminal paper [Tidy Data](https://vita.had.co.nz/papers/tidy-data.pdf "Tidy Data").
+
+Retrieve 2015 ACS 1-year variables and geometries for a specific set of geographies.
+
+- Define multiple locations manually
+- Define and name multiple variables manually
+- Retrieve geometries, specifically the cartographic boundaries
+- Output in long/tidy format
+
+```{r class.source = 'fold-show', results='hide', message = FALSE, warning = FALSE}
+# Retrieve variables and geographies for Multnomah, Washington, and Clackamas counties
+co_2015_acs1 <- tidycensus::get_acs(
+  geography = 'county', # Specify geography for which to retrieve data
+  state = 'OR', # Specify Oregon
+  county = c('Multnomah', 'Washington', 'Clackamas'), # Specify a list of counties
+  variables = c(hh_medinc_total = 'B19013_001', # Specify and name multiple variables
+                hh_foodst_total = 'B22003_001', 
+                hh_foodst_rec = 'B22003_002'),
+  year = 2015, # Specify year
+  survey = 'acs1', # Specify survey type
+  geometry = T, # Include or omit spatial geometry
+  # By default, cartographic boundary files are used
+  output = 'tidy', # Set to wide or tidy/long format
+  cache_table = T # Cache the table so it can be called quicker in the future, or not to save memory
+)
+```
+
+Compare the structure of the data sets.
+
+```{r}
+# View the 2018 ACS 5-year table in wide format
+co_2018_acs5 %>% st_set_geometry(NULL) %>% kable() %>% kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+
+# View the 2015 ACS 1-year table in long/tidy format
+co_2015_acs1 %>% st_set_geometry(NULL) %>% kable() %>% kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+```
+
+Retrieve 2018 ACS 5-year variables and geometries for all geographies within a larger geography (e.g., all counties within a state).
+
+- Define multiple locations with a vector
+- Define and name multiple variables manually
+- Retrieve geometries, specifically the cartographic boundaries
+
+```{r class.source = 'fold-show', results='hide', message = FALSE, warning = FALSE}
+# Create a vector of county FIPS codes for use in the `tidycensus` call
+county_vector <- tidycensus::fips_codes %>% # Retrieve table of all state and county names and FIPS codes
+  filter(state_name == "Oregon") %>% # Query Oregon counties
+  select(county_code, county) # Maintain only the county code and name variables
+
+# Retrieve variables and geometries for counties within the vector
+co_OR_2018_acs5 <- tidycensus::get_acs(
+  geography = 'county', # Specify geography for which to retrieve data
+  state = 'OR', # Specify state abbreviation
+  county = county_vector$county_code, # Vector of all counties
+  variables = c(hh_medinc_total = 'B19013_001', # Specify and name multiple variables
+                hh_foodst_total = 'B22003_001', 
+                hh_foodst_rec = 'B22003_002'),
+  year = 2018, # Specify year
+  survey = 'acs5', # Specify survey type
+  geometry = TRUE, # Include or omit spatial geometry
+  cb = TRUE, # Specify cartographic boundary files or TIGER/Line shapefiles
+  output = 'tidy', # Set to wide or tidy/long format
+  cache_table = TRUE # Cache the table so it can be called quicker in the future, or not to save memory
+)
+```
+
+```{r}
+# View data
+co_OR_2018_acs5 %>% st_set_geometry(NULL) %>% head() %>% kable() %>% kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+```
+
+## Example 3: Tigris
+
+In some cases, you may want use the tabular and spatial data separately or may want to join the two data sets after analysis. In those cases, `tidycensus` can be used in combination with the `tigris` package.
+
+Retrieve tract data for all counties within Oregon.
+
+- Use a vector of variables
+- Use a vector of locations
+- Use `tidyensus` to retrieve tabular data
+- Use `tigris` to retrieve spatial data
+- Join the tabular and spatial data
+
+```{r class.source = 'fold-show', results='hide', message = FALSE, warning = FALSE}
+# Create a vector of variables for use in the `tidycensus` call.
+DC2010_sf1_var <- c(pop_sex_total = 'P012001',
+                pop_sex_m_tot = 'P012002',
+                pop_sex_m_00_04 = 'P012003',
+                pop_sex_m_05_09 = 'P012004',
+                pop_sex_m_10_14 = 'P012005',
+                pop_sex_m_15_17 = 'P012006',
+                pop_sex_m_18_19 = 'P012007',
+                pop_sex_f_tot = 'P012026',
+                pop_sex_f_00_04 = 'P012027',
+                pop_sex_f_05_09 = 'P012028', 
+                pop_sex_f_10_14 = 'P012029', 
+                pop_sex_f_15_17 = 'P012030', 
+                pop_sex_f_18_19 = 'P012031')
+
+# Retrieve census block variables for all Oregon counties
+tr_2010_dc <- tidycensus::get_decennial(
+geography = 'tract', # Specify geography for which to retrieve data
+variables = DC2010_sf1_var, # Vector of variables
+state = 'OR', # Specify state abbreviation
+county = county_vector$county_code, # Vector of all counties
+year = 2010, # Specify year
+geometry = F, # Include or omit spatial geometry
+output = 'wide', # Set to wide or long/tidy format
+cache_table = T # Cache the table so it can be called quicker in the future
+)
+```
+
+Retrieve shapes for all Oregon tracts via the `tigris` package.
+
+```{r class.source = 'fold-show', results='hide', message = FALSE, warning = FALSE}
+# By default `tigris` retrieves the most recent vintage of a dataset; specify year as-needed
+# The default coordinate reference system (CRS) is NAD83 (EPSG 4269 https://spatialreference.org/ref/epsg/nad83/)
+# If cb is set to TRUE, download a generalized (1:500k) tracts file. Defaults to (the most detailed TIGER/Line file)
+
+gc() # A call of gc causes a garbage collection to take place. The primary purpose of calling gc is for the report on memory usage. Use this before and after a data-heavy processing task.
+tr_2010_dc_shp <- tigris::tracts("OR", year = 2010, cb = FALSE)
+gc()
+```
+
+Join the attributes to the geometries.
+
+```{r class.source = 'fold-show', results='hide', message = FALSE, warning = FALSE}
+tr_2010_dc_geo <- tr_2010_dc_shp %>%
+  inner_join(tr_2010_dc, by = c("GEOID10" = "GEOID"))
+
+class(tr_2010_dc_geo)
+st_crs(tr_2010_dc_geo)
+```
+
+Note that the resulting object's class is dependent on the join order. The left side's class takes priority; therefore, in the above, the attributes (right side) are being joined to the geometries (left side), so the resulting object class is sf. If the order is flipped (below) and the geometries (right side) are joined to the attributes (let side), the object class is not sf. To make it so, add `%>% st_as_sf()`
+
+```{r class.source = 'fold-show', results='hide', message = FALSE, warning = FALSE}
+tr_2010_dc_geo_REVERSE1 <- tr_2010_dc %>%
+  inner_join(tr_2010_dc_shp, by = c("GEOID" = "GEOID10"))
+
+class(tr_2010_dc_geo_REVERSE1)
+st_crs(tr_2010_dc_geo_REVERSE1)
+
+tr_2010_dc_geo_REVERSE2 <- tr_2010_dc %>%
+  inner_join(tr_2010_dc_shp, by = c("GEOID" = "GEOID10")) %>%
+  st_as_sf()
+
+class(tr_2010_dc_geo_REVERSE2)
+st_crs(tr_2010_dc_geo_REVERSE2)
+```
+
+## Example 4: Aggregation
+
+[At a time in 2019] Retrieving all decennial census block group data for a specified state or county generates an [error](https://github.com/walkerke/tidycensus/issues/193 "error"). This has since been resolved, but it provides a good example of how smaller nested geographies can be aggregated to larger geographies (e.g., block to block groups).
+
+**This works now...**
+
+```{r class.source = 'fold-show', results='hide', message = FALSE, warning = FALSE}
+bg_2010_dc <- tidycensus::get_decennial( # API call
+  geography = 'block group', # Specify geography for which to retrieve data
+  state = 'WA', # Specify state abbreviation
+  county = 'King', # Specify county
+  variables = 'P001001', # Specify variable
+  year = 2010, # Specify year
+  geometry = FALSE, # Include or omit spatial geometry
+  output = 'wide', # Set to wide or tidy/long format
+  cache_table = TRUE # Cache the table so it can be called quicker in the future, or not to save memory
+)
+```
+
+**But if it didn't...**
+
+Retrieve block data, create the block group GEOID by removing the last 3 characters in the block GEOID, and group by/summarize to block group.
+
+```{r class.source = 'fold-show', results='hide', message = FALSE, warning = FALSE}
+# Retrieve decennial census variables for all blocks
+bl_2010_dc <- tidycensus::get_decennial(
+  geography = 'block', # Specify statistical area for which to retrieve data
+  state = 'WA', # Specify state abbreviation
+  county = 'King', # Specify county
+  variables = 'P001001',
+  year = 2010, # Specify year
+  geometry = FALSE, # Include or omit spatial geometry
+  output = 'wide', # Set to wide or tidy/long format
+  cache_table = TRUE # Cache the table so it can be called quicker in the future, or not to save memory
+)
+```
+
+Aggregate data to block groups.
+
+```{r class.source = 'fold-show', results='hide', message = FALSE, warning = FALSE}
+bl_2010_dc_to_bg <- bl_2010_dc %>% 
+  mutate(GEOID_BG = stringr::str_sub(GEOID, 1, -4)) %>% # Create BG GEOID
+  select(GEOID_BG, 1:length(.), -GEOID, -NAME) %>% # Reorder/remove columns
+  rename(GEOID = GEOID_BG) %>% # Rename GEOID
+  gather(variable, est, 2:length(.)) %>% # Reshape from wide to long form by creating name-value pairs for all variables
+  group_by(GEOID, variable) %>% # Group by GEOID and variable names
+  summarize(est = sum(est, na.rm = T)) %>% # Sum values per group
+  ungroup() %>% # Ungroup
+  spread(variable, est) # Reshape from long to wide form by extending values into their own columns
+```
+
+Compare the data sets.
+
+```{r}
+bgbl_2010_dc <- bg_2010_dc %>%
+  inner_join(bl_2010_dc_to_bg, by = 'GEOID')
+```
+
+```{r}
+# View the comparison data set
+bgbl_2010_dc %>% head() %>% kable() %>% kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+```
+
+# Visualization
+
+`ggplot2` is a data visualization package that is part of the `tidyverse`.
+
+Create a plot of 2010 decennial census state populations.
+
+```{r class.source = 'fold-show', results='hide', message = FALSE, warning = FALSE}
+st_2010_dc %>%
+  ggplot(aes(x = P001001, y = reorder(NAME, P001001,))) + # Set the x-axis to the variable and the y-axis to the observation (sort in descending order)
+  ggtitle("2010 State Population") + # Add a title
+  xlab("Total Population") + # Name the x-axis
+  ylab("State Name") + # Name the y-axis
+  geom_point() # Add point geometry
+```
+
+Create a plot of 2014-2018 ACS 5-year estimates and MOEs for all Oregon counties.
+
+```{r class.source = 'fold-show', results='hide', message = FALSE, warning = FALSE}
+co_OR_2018_acs5 %>%
+  mutate(NAME = gsub(" County, Oregon", "", NAME)) %>%
+  filter(variable == 'hh_medinc_total') %>%
+  ggplot(aes(x = estimate, y = reorder(NAME, estimate))) +
+  geom_errorbarh(aes(xmin = estimate - moe, xmax = estimate + moe)) +
+  geom_point(color = "red", size = 3) +
+  labs(title = "Median Household Income by County",
+       subtitle = "2014-2018 (5-year) American Community Survey",
+       y = "County Name",
+       x = "ACS estimate (bars represent margin of error)")
+```
+
+Create a choropleth map of a single variable across geographies within a single county.
+
+```{r class.source = 'fold-show', results='hide', message = FALSE, warning = FALSE}
+# Retrieve variables and geographies for census block groups in Multnomah County, Oregon
+bg_Mult_2018_acs5 <- tidycensus::get_acs( # API call
+  geography = 'block group', # Specify statistical area for which to retrieve data
+  state = 'OR', # Specify state name
+  county = c('Multnomah'), # Specify county name
+  variables = c(hh_medinc_total = 'B19013_001'),
+  year = 2018, # Specify year
+  survey = 'acs5', # Specify survey type
+  geometry = T, # Include or omit spatial geometry
+  output = 'tidy', # Set to wide or tidy/long format
+  cache_table = T # Cache the table so it can be called quicker in the future, or not to save memory
+)
+
+# Create choropleth map
+bg_Mult_2018_acs5 %>%
+  ggplot(aes(fill = estimate)) + # Specify the aesthetic as fill based on the estimate values
+  geom_sf(color = NA) + # Specify outline color
+  coord_sf(crs = 26910) + # Specify coordinate system/projection (e.g., UTM10N)
+  ggtitle("Multnomah County Median Household Income", subtitle = "2014-2018 (5-year) ACS Data") + # Specify title and subtitle
+  scale_fill_viridis_c(option = "magma") # Specify fill symbology
+```
+
+Created faceted choropleths maps of multiple variables across geographies within a single county.
+
+As mentioned by Kyle Walker in his `tidycensus` tutorial, "one of the most powerful features of `ggplot2` is its support for small multiples, which works very well with the tidy data format returned by `tidycensus`. Many Census and ACS variables return _counts_, which are generally inappropriate for choropleth mapping. In turn, `get_decennial` and `get_acs` have an optional argument, `summary_var`, that can work as a multi-group denominator when appropriate." For example, view the racial/ethnic population distribution within a given county.
+
+```{r class.source = 'fold-show', results='hide', message = FALSE, warning = FALSE}
+# Create a vector of variables 
+DC2010_sf1_race_vars <- c(White = "P005003", 
+              Black = "P005004", 
+              Asian = "P005006", 
+              Hispanic = "P004003")
+
+# Retrieve variables and geographies for census block groups in Multnomah County, Oregon
+bg_Mult_2010_dc <- tidycensus::get_decennial( # API call
+  geography = 'tract', # Specify statistical area for which to retrieve data
+  state = 'OR', # Specify state name
+  county = c('Multnomah'), # Specify county name
+  variables = DC2010_sf1_race_vars,
+  year = 2010, # Specify year
+  geometry = T, # Include or omit spatial geometry
+  output = 'tidy', # Set to wide or tidy/long format
+  summary_var = "P001001" # Specify summary variable (e.g., total population)
+)
+
+bg_Mult_2010_dc %>%
+  mutate(pct = 100 * (value / summary_value)) %>% # Calculate the race/ethnic proportion of the total pop. 
+  ggplot(aes(fill = pct)) + # Specify the aesthetic as fill based on the proportion values
+  facet_wrap(~variable) + # Facet wrap on the race/ethnicity
+  geom_sf(color = NA) + # Specify outline color
+  coord_sf(crs = 26910) + # Specify coordinate system/projection (e.g., UTM10N)
+  ggtitle("Multnomah County", subtitle = "Population by Race/Ethnicity") + # Specify title and subtitle
+  scale_fill_viridis_c() # Specify fill symbology
+```
+
+Create an unformatted, interactive map using `mapview`.
+
+```{r class.source = 'fold-show'}
+co_OR_2018_acs5 %>%
+  mapview(.)
+```
+
+Create a formatted, interactive map using `leaflet`.
+
+```{r class.source = 'fold-show', message = FALSE, warning = FALSE}
+# Use leaflet's color ramp creator:
+medinc_colors <- leaflet::colorQuantile(
+  palette = 'Greens', # This will accept any ColorBrewer color pallette
+  domain = bg_Mult_2018_acs5$estimate, # Specify the variable
+  n = 9 # Specify the number of breaks
+)
+
+leaflet() %>% 
+  addTiles('http://{s}.tile.stamen.com/toner/{z}/{x}/{y}.png') %>%
+  addPolygons(
+    data = filter(co_2010_dc, NAME == "Multnomah County, Oregon"),
+    weight = 3,
+    fillOpacity = 0,
+    color = 'royalblue',
+    group = "Counties (2010 DC)",
+    popup = paste0(
+      "<b>2010 County</b> ",
+      paste0("<br><b>Name</b>: ", co_2010_dc$NAME, "<br><b>Total Population</b>: ", prettyNum(co_2010_dc$pop_tot, ','))
+    )
+  ) %>%
+  addPolygons(
+    data = bg_Mult_2018_acs5, 
+    weight = 1,
+    color = 'black',
+    fillColor = medinc_colors(bg_Mult_2018_acs5$estimate),
+    fillOpacity = 0.7,
+    group = "Block Groups (2018 ACS 5-year)",
+    popup = paste0(
+      "<b>2018 ACS 5-year Block Group</b> ",
+      paste0("<br><b>Median HH Income Estimate</b>: ", prettyNum(bg_Mult_2018_acs5$estimate, ','), "<br><b>Median HH Income MOE</b>: ", prettyNum(bg_Mult_2018_acs5$moe, ','))
+    )
+  ) %>%
+  # Layers control
+  addLayersControl(
+    overlayGroups = c("Counties (2010 DC)", "Block Group (2018 ACS 5-year)"),
+    options = layersControlOptions(collapsed = FALSE)
+  )
+```
+
+# Export and Import
+
+Save out data frames to various formats.
+
+```{r class.source = 'fold-show', results='hide', warning=FALSE, error=FALSE, message=FALSE}
+# Export files
+# write_xlsx(list('co_OR_2018_acs5' = co_OR_2018_acs5), "./Data/co_OR_2018_acs5.xlsx")
+# st_write(co_OR_2018_acs5,"./Data/co_OR_2018_acs5.shp")
+# saveRDS(co_OR_2018_acs5,"./Data/co_OR_2018_acs5.rds")
+# arc.write(path = "./Data/R.gdb/co_OR_2018_acs5", data = co_OR_2018_acs5, shape_info = list(type = 'Polygon', WKT = 'GEOGCS["GCS_North_American_1983",DATUM["D_North_American_1983",SPHEROID["GRS_1980",6378137,298.257222101]],PRIMEM["Greenwich",0],UNIT["Degree",0.017453292519943295]]'), overwrite = T)
+```
+
+Read in data to avoid duplicative calls to Census API.
+
+```{r class.source = 'fold-show', results='hide', warning=FALSE, error=FALSE, message=FALSE}
+# Read in RDS dataset already retrieved via `tidycensus`
+# co_OR_2018_acs5_XLSX  <- read_excel("./Data/co_OR_2018_acs5.xlsx", sheet = "co_OR_2018_acs5")
+# co_OR_2018_acs5_SHP  <- st_read("./Data/co_OR_2018_acs5.shp")
+# co_OR_2018_acs5_RDS <- readRDS("./Data/co_OR_2018_acs5.rds")
+```
