@@ -1,7 +1,7 @@
 # tidycensus_tutorial
 tidycensus R package tutorial
 
-As noted by its author, Kyle Walker, `tidycensus` is an R package that allows users to interface with the US Census Bureau's decennial Census and American Community Survey (ACS) APIs and return tidyverse-ready data frames, optionally with simple feature (sf) geometry included.
+`tidycensus` is an R package that allows users to interface with the U.S. Census Bureau's decennial census and American Community Survey (ACS) APIs, in order to retrieve demographic and economic data for specified geographies. As noted by its author, Kyle Walker, tidycensus "returns tidyverse-ready data frames of selected variables, and the option to include simple feature (sf) geometries".
 
 This tutorial outlines some of the basic functionality of `tidycensus`.
 
