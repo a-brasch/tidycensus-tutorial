@@ -5,8 +5,8 @@ date: "10/11/2020"
 output:
   html_document:
     includes:
-      before_body: ./R/header.html
-      after_body: ./R/footer.html
+      before_body: ./header.html
+      after_body: ./footer.html
     code_folding: show
     highlight: zenburn
     self_contained: yes
@@ -27,8 +27,9 @@ editor_options:
 always_allow_html: yes
 ---
 
-```{r setup, echo=FALSE, warning=FALSE, error=FALSE, results='hide', message=FALSE}
+```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
+htmltools::tagList(rmarkdown::html_dependency_font_awesome())
 ```
 
 ```{r echo=FALSE, warning=FALSE, error=FALSE, results='hide', message=FALSE}
